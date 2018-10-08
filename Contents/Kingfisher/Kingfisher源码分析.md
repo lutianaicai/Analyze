@@ -93,13 +93,14 @@ extension Kingfisher where Base: ImageView {
                          placeholder: Placeholder? = nil,
                          options: KingfisherOptionsInfo? = nil,
                          progressBlock: DownloadProgressBlock? = nil,
-                         completionHandler: CompletionHandler? = nil) -> RetrieveImageTask {}
+                         completionHandler: CompletionHandler? = nil) -> RetrieveImageTask 
 ```
 这个就是给ImageView设置图片的主方法，因为Swift方法的参数可空导致这里就一个主方法而不像OC内种写一个万能方法再写一堆缺少某些参数的便利方法去调用万能方法。
 
 其实喵神这里注释写的已经非常清楚了，我这里简单展开说明一下。
 
-参数第一个`Resource`其实是一个协议，它定义了从缓存查找图片的cacheKey以及网络加载的downloadURL
+####资源Resource
+参数第一个`resource`其实是一个协议，它定义了从缓存查找图片的cacheKey以及网络加载的downloadURL
 
 ```swift
 public protocol Resource {
@@ -111,7 +112,7 @@ public protocol Resource {
 }
 ```
 
-以及方法实现的第一步就是对`resource`进行判空，如果为空就返回一个空`RetrieveImageTask`
+以及主方法实现的第一步就是对`resource`进行判空，如果为空就返回一个空`RetrieveImageTask`
 
 ```swift
 guard let resource = resource else {
@@ -128,7 +129,8 @@ guard let resource = resource else {
 setWebURL(resource.downloadURL)
 ```
 
-再说第二个参数`Placeholder`，它也是一个协议（所谓从一个协议开始），很简单就是定义了两个方法，一个添加placeholder，一个删除placeholder
+####占位图
+再说第二个参数`placeholder`，它也是一个协议（所谓从一个协议开始），很简单就是定义了两个方法，一个添加placeholder，一个删除placeholder
 
 ```swift
 public protocol Placeholder {
@@ -139,6 +141,34 @@ public protocol Placeholder {
     /// How the placeholder should be removed from a given image view.
     func remove(from imageView: ImageView)
 }
+```
+在主方法中是这样添加placeholder的
+
+```swift
+if !options.keepCurrentImageWhileLoading || noImageOrPlaceholderSet {
+// Always set placeholder while there is no image/placeholder yet.
+    self.placeholder = placeholder
+}
+```
+注释写的清楚，当还没有image或placeholder时，总是设置一个placeholder
+
+####策略options
+第三个参数`options`这回不是协议了，它是一个包含不同策略信息的数组。诸如强制刷新啊，只内存缓存图片啊之类。如果用户不进行配置那么系统将使用默认
+
+```swift
+var options = KingfisherManager.shared.defaultOptions + (options ?? KingfisherEmptyOptionsInfo)
+```
+
+剩下两个参数分别是progress回调和completion回调就不细说了。
+
+####生成RetrieveImageTask
+这些参数都准备好了就开始调用
+
+```swift
+func retrieveImage(with resource: Resource,
+        options: KingfisherOptionsInfo?,
+        progressBlock: DownloadProgressBlock?,
+        completionHandler: CompletionHandler?) -> RetrieveImageTask
 ```
 
 
