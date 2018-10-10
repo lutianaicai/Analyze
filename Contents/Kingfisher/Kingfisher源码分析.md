@@ -100,7 +100,7 @@ extension Kingfisher where Base: ImageView {
 其实喵神这里注释写的已经非常清楚了，我这里简单展开说明一下。
 
 ####资源Resource
-参数第一个`resource`其实是一个协议，它定义了从缓存查找图片的cacheKey以及网络加载的downloadURL
+参数第一个`resource`其实是一个协议，它定义了从缓存查找图片的`cacheKey`以及网络加载的`downloadURL`
 
 ```swift
 public protocol Resource {
@@ -130,7 +130,7 @@ setWebURL(resource.downloadURL)
 ```
 
 ####占位图
-再说第二个参数`placeholder`，它也是一个协议（所谓从一个协议开始），很简单就是定义了两个方法，一个添加placeholder，一个删除placeholder
+再说第二个参数`placeholder`，它也是一个协议（所谓从一个协议开始），很简单就是定义了两个方法，一个添加占位图，一个删除占位图
 
 ```swift
 public protocol Placeholder {
@@ -142,7 +142,7 @@ public protocol Placeholder {
     func remove(from imageView: ImageView)
 }
 ```
-在主方法中是这样添加placeholder的
+在主方法中是这样添加占位图的
 
 ```swift
 if !options.keepCurrentImageWhileLoading || noImageOrPlaceholderSet {
@@ -159,16 +159,128 @@ if !options.keepCurrentImageWhileLoading || noImageOrPlaceholderSet {
 var options = KingfisherManager.shared.defaultOptions + (options ?? KingfisherEmptyOptionsInfo)
 ```
 
-剩下两个参数分别是progress回调和completion回调就不细说了。
+剩下两个参数分别是`progress`回调和`completion`回调就不细说了。
 
-####生成RetrieveImageTask
-这些参数都准备好了就开始调用
+####获取图片
+这些参数都准备好了就开始让`KingfisherManager.shared`调用下面方法去获取图片
 
 ```swift
 func retrieveImage(with resource: Resource,
         options: KingfisherOptionsInfo?,
         progressBlock: DownloadProgressBlock?,
         completionHandler: CompletionHandler?) -> RetrieveImageTask
+```
+
+这里根据`options`是否强制刷新，如果强制刷新那么直接走网络下载并缓存的方法，否则先去缓存中获取图片然后在回调`completionHandler`里去添加图片
+
+####safeAsync
+回调里跟`SDWebImage`一样同样有个`safeAsync`
+
+```swift
+DispatchQueue.main.safeAsync {
+    ...
+    strongBase.image = image
+    ...
+}
+```
+
+这个`safeAsync`是个`DispatchQueue`的扩展
+
+```swift
+// This method will dispatch the `block` to self.
+// If `self` is the main queue, and current thread is main thread, the block
+// will be invoked immediately instead of being dispatched.
+func safeAsync(_ block: @escaping ()->()) {
+    if self === DispatchQueue.main && Thread.isMainThread {
+        block()
+    } else {
+        async { block() }
+    }
+}
+```
+目的也很明确保证图像的绘制在主线程完成
+
+###KingfisherManager
+刚才提到了获取图片的方法就是`KingfisherManager`调用的，它是一个全局唯一的单例它协调`ImageDownloader`以及`ImageCache`来进行图片的获取。
+
+####downloadAndCacheImage
+首先说下载并缓存，如果在获取图片的`options`里策略选择了`forceRefresh`那么`KingfisherManager`会率先调用
+
+
+```swift
+func downloadAndCacheImage(with url: URL,
+                             forKey key: String,
+                      retrieveImageTask: RetrieveImageTask,
+                          progressBlock: DownloadProgressBlock?,
+                      completionHandler: CompletionHandler?,
+                                options: KingfisherOptionsInfo) -> RetrieveImageDownloadTask?
+```
+
+在这个方法的回调里先是进行错误判断，如果`url`下载这边失败了就尝试从缓存中加载图片
+
+
+```swift
+if let error = error, error.code == KingfisherError.notModified.rawValue {
+    // Not modified. Try to find the image from cache.
+    // (The image should be in cache. It should be guaranteed by the framework users.)
+    targetCache.retrieveImage(forKey: key, options: options, completionHandler: { (cacheImage, cacheType) -> Void in
+        completionHandler?(cacheImage, nil, cacheType, url)
+    })
+    return
+}
+```
+
+网络获取图片成功之后就会按照`options`调用下面方法
+
+```swift
+open func store(_ image: Image,
+                      original: Data? = nil,
+                      forKey key: String,
+                      processorIdentifier identifier: String = "",
+                      cacheSerializer serializer: CacheSerializer = DefaultCacheSerializer.default,
+                      toDisk: Bool = true,
+                      completionHandler: (() -> Void)? = nil)
+```
+
+按照喵神的注释
+>Store an image to cache. It will be saved to both memory and disk. It is an async operation.
+
+这是一个异步操作，没有什么更多要解释的。值得一提的是，这里储存参数有一个`original`这个是Data格式的，这里处理是为了控制磁盘的大小，喵神建议大家为了磁盘更好的储存性能尽量提供`original`。
+
+####tryToRetrieveImageFromCach
+如果没有强制要求更新，都是首先去缓存中查找图片的，也就是先走下面这个方法
+
+```swift
+func tryToRetrieveImageFromCache(forKey key: String,
+                                       with url: URL,
+                              retrieveImageTask: RetrieveImageTask,
+                                  progressBlock: DownloadProgressBlock?,
+                              completionHandler: CompletionHandler?,
+                                        options: KingfisherOptionsInfo)
+```
+
+这个方法里定义了一个回调
+
+```swift
+let diskTaskCompletionHandler: CompletionHandler = { (image, error, cacheType, imageURL) -> Void in
+            completionHandler?(image, error, cacheType, imageURL)
+}
+```
+
+然后调用方法
+
+```swift
+func retrieveImage(forKey key: String,
+                               options: KingfisherOptionsInfo?,
+                     completionHandler: ((Image?, CacheType) -> Void)?) -> RetrieveImageDiskTask?
+```
+首先在缓存中查找这张图片如果找到了就直接闭包返回
+
+```swift
+if image != nil {
+    diskTaskCompletionHandler(image, nil, cacheType, url)
+    return
+}
 ```
 
 
