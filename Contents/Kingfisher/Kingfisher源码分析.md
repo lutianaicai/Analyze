@@ -1,7 +1,7 @@
 # Kingfisher源码分析
 
 ## 缘起
-最近解决公司项目缓存问题时候发现自己对沙盒理解还不深刻，就从项目中看了一下喵神的实现，惊叹于Kingfisher这个库的整洁规范。所以就萌生了写一篇文章记录阅读源码这件事情的意愿。
+最近解决公司项目缓存问题时候发现自己对沙盒理解还不深刻，就从项目中看了一下喵神的实现，惊叹于[Kingfisher](https://github.com/onevcat/Kingfisher)这个库的整洁规范。所以就萌生了写一篇文章记录阅读源码这件事情的意愿。
 
 ## 从接口谈起
 首先还是要稍微介绍一下Kingfisher:
@@ -340,14 +340,15 @@ originalCache.retrieveImage(forKey: key, options: optionsWithoutProcessor) { ima
 ```
 
 ###ImageCache
-缓存图片的核心类喵是这样注释的：
+缓存图片的核心类喵神是这样注释的：
 >/// `ImageCache` represents both the memory and disk cache system of Kingfisher. 
 /// While a default image cache object will be used if you prefer the extension methods of Kingfisher, 
 /// you can create your own cache object and configure it as your need. You could use an `ImageCache`
 /// object to manipulate memory and disk cache for Kingfisher.
 
 它维护了一个内存缓存和一个磁盘缓存，磁盘缓存支持自己配置。
-
+***
+####缓存获取图片
 存方法之前提到了，删除方法也差不多同样是一个异步操作，不详细说了。说一下缓存获取图片方法。
 
 ```swift 
@@ -418,7 +419,8 @@ block = DispatchWorkItem(block: {
             
 sSelf.ioQueue.async(execute: block!)
 ```
-
+***
+####过期清理
 还有清除内存缓存，清除磁盘缓存方法，这里都不详细说了，说一下过期磁盘缓存清理。先用下面这个方法获取需要删除的URL数组，磁盘缓存大小和缓存文件
 
 ```swift
@@ -496,7 +498,190 @@ DispatchQueue.main.async {
 大概就是说这个通知在磁盘缓存过期或者太大了自动清理时候会发出，而`clearDiskCache`这个方法并不会出发。通知中的`userInfo`带着被移除的文件哈希值。从这个数组中你能获取被删除文件的哈希值。然后这个通知的主要目的是处理服务器的`304 Not Modified`。因为`Kingfisher`的缓存机制是基于`URL`，但是有时`URL`没变但是图片变了，比如用户头像。你当然可以设置强制刷新，但这不是好方法，尤其是重复下载同一个头像，所以这个通知机制就解决了服务器304的问题。具体见[this wiki](https://github.com/onevcat/Kingfisher/wiki/How-to-implement-ETag-based-304-(Not-Modified)-handling-in-Kingfisher) 
 
 ###ImageDownloader
-     
+>`ImageDownloader` represents a downloading manager for requesting the image with a URL from server.
+
+####ImageFetchLoad
+不多赘述，直接分析。首先定义了一个`ImageFetchLoad`类
+
+```swift 
+class ImageFetchLoad {
+    var contents = [(callback: CallbackPair, options: KingfisherOptionsInfo)]()
+    var responseData = NSMutableData()
+
+    var downloadTaskCount = 0
+    var downloadTask: RetrieveImageDownloadTask?
+    var cancelSemaphore: DispatchSemaphore?
+}
+```
+
+这个类包含一些属性，都挺容易理解的
+***
+####downloadImage
+主方法，也是对外回调下载数据的方法:
+
+```swift
+open func downloadImage(with url: URL,
+                       retrieveImageTask: RetrieveImageTask? = nil,
+                       options: KingfisherOptionsInfo? = nil,
+                       progressBlock: ImageDownloaderProgressBlock? = nil,
+                       completionHandler: ImageDownloaderCompletionHandler? = nil) -> RetrieveImageDownloadTask?
+```
+
+首先判断`retrieveImageTask`是否为空或者已经取消，如果为空或已经取消就返回nil
+然后因为`url`要作为`load key`, 所以在开始下载之前还要获取一下最终`url`并判断是否改成`nil`了
+
+```swift
+// We need to set the URL as the load key. So before setup progress, we need to ask the `requestModifier` for a final URL.
+var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
+request.httpShouldUsePipelining = requestsUsePipelining
+
+if let modifier = options?.modifier {
+    guard let r = modifier.modified(for: request) else {
+        completionHandler?(nil, NSError(domain: KingfisherErrorDomain, code: KingfisherError.downloadCancelledBeforeStarting.rawValue, userInfo: nil), nil, nil)
+        return nil
+    }
+    request = r
+}
+        
+// There is a possibility that request modifier changed the url to `nil` or empty.
+guard let url = request.url, !url.absoluteString.isEmpty else {
+    completionHandler?(nil, NSError(domain: KingfisherErrorDomain, code: KingfisherError.invalidURL.rawValue, userInfo: nil), nil, nil)
+    return nil
+}
+```
+
+然后调用`setup`方法根据`url`和`options`开始生成`downloadTask` 如果同一`url`一次下载没有完成并不会再发一次下载请求，而是
+
+```swift
+fetchLoad.downloadTaskCount += 1
+```
+
+如果这次下载完成就会调用
+
+```swift 
+private func cleanFetchLoad(for url: URL) {
+    guard let downloader = downloadHolder else {
+        return
+    }
+
+    downloader.barrierQueue.sync(flags: .barrier) {
+        downloader.fetchLoads.removeValue(forKey: url)
+        if downloader.fetchLoads.isEmpty {
+            downloadHolder = nil
+        }
+    }
+}
+```
+
+对`url`对应的`fetchLoads`进行清除，这样下载就会再次调用
+
+值得一提的是，喵神这里按功能定义了三个`DispatchQueue`
+
+```swift
+let barrierQueue: DispatchQueue
+let processQueue: DispatchQueue
+let cancelQueue: DispatchQueue
+```
+
+`barrierQueue`的使用都是配合`barrier`进行的，主要方式是
+
+```swift
+barrierQueue.sync(flags: .barrier) { ... }
+```
+
+主要是保证对`fetchLoads`的读写安全。
+
+`processQueue`保证获取到数据后缓存，`data`转`image`等操作不会阻塞主线程
+
+`cancelQueue`的使用结合了`cancelSemaphore`信号量
+
+```swift
+cancelQueue.async {
+    _ = fetchLoad.cancelSemaphore?.wait(timeout: .distantFuture)
+    fetchLoad.cancelSemaphore = nil
+    prepareFetchLoad()
+}
+```
+
+当前url现在已开始未结束时又来了下载请求就会让后来的开始等待，如果之前的请求失败，才会发起这次的请求
+
+```swift
+private func callCompletionHandlerFailure(error: Error, url: URL) {
+    guard let downloader = downloadHolder, let fetchLoad = downloader.fetchLoad(for: url) else {
+        return
+    }
+        
+    // We need to clean the fetch load first, before actually calling completion handler.
+    cleanFetchLoad(for: url)
+        
+    var leftSignal: Int
+    repeat {
+        leftSignal = fetchLoad.cancelSemaphore?.signal() ?? 0
+    } while leftSignal != 0
+        
+    for content in fetchLoad.contents {
+        content.options.callbackDispatchQueue.safeAsync {
+            content.callback.completionHandler?(nil, error as NSError, url, nil)
+        }
+    }
+}
+```
+
+***
+####处理图片
+原始数据完成后调用
+
+```swift
+private func processImage(for task: URLSessionTask, url: URL) {...}
+```
+
+进行图片的处理，`data`处理成`image`后图片还是要进行缓存防止二次处理
+
+```swift
+if let data = data, image == nil {
+    image = processor.process(item: .data(data), options: options)
+    // Add the processed image to cache. 
+    // If `image` is nil, nothing will happen (since the key is not existing before).
+    imageCache[processor.identifier] = image
+}
+```
+
+最后如果图片没有问题就可以走代理方法传回去在主线程进行设置了就可以了
+
+```swift 
+if let image = image {
+    downloader.delegate?.imageDownloader(downloader, didDownload: image, for: url, with: task.response)
+
+    let imageModifier = options.imageModifier
+    let finalImage = imageModifier.modify(image)
+
+    if options.backgroundDecode {
+        let decodedImage = finalImage.kf.decoded
+        callbackQueue.safeAsync { completionHandler?(decodedImage, nil, url, data) }
+    } else {
+        callbackQueue.safeAsync { completionHandler?(finalImage, nil, url, data) }
+    }       
+} 
+```
+
+至此，[Kingfisher](https://github.com/onevcat/Kingfisher)的主要流程方法就基本介绍完了。
+
+##总结
+[Kingfisher](https://github.com/onevcat/Kingfisher)的加载过程其实跟`SDWebImage`是一样的，在默认设置下：
+
+* 查看缓存
+    * 有图
+        * 返回图片并更新
+    * 无图
+        * 异步下载
+        * 缓存图片
+        * 返回图片并更新
+
+第一次写源码分析也是第一次写技术博客，`Kingfisher`还有很多技术细节没有一一展开（~~其实因为我太菜看不懂~~）。
+在分析源码的过程中，真的体会到了很多基础知识的不足，如果你发现了有哪里我理解的不对，欢迎指教。
+这篇分析从 Markdown 格式上借鉴了灯塔大神的格式，这里附上灯塔博客地址[@Draveness](https://github.com/Draveness)
+最后感谢 Zoe 女士，她应该是本文第一位读者。
+
 
 
 
