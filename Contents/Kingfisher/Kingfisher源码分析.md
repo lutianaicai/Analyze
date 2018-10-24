@@ -23,6 +23,7 @@ imageView.kf.setImage(with: url)
 Kingfisher这里依旧保持了调用的简洁风格，主要功能一行代码。这里的方法调用体现了Swift跟OC的一点风格差异，在这里稍微展开谈谈。
 
 ###kf与sd_
+
 `SDWebImage`的主要方法采取的是加前缀的方式进行对扩展方法的标记。
 `Kingfisher`既然是纯Swift框架就必然从*OOP*（object-oriented programming）过渡到了*POP*（protocol oriented programming）我们来看`kf`这种链式调用是如何实现的
 
