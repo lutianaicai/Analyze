@@ -4,7 +4,7 @@
 
 ##Singleton
 
-`SVProgressHUD` 同 `MBProgressHUD` 一样，都是 `UIView` 的子类，不同与 `MB` 的高度定制化, `SV` 提供的是单例，这也是它简洁的一大因素。
+`SVProgressHUD` 同 `MBProgressHUD` 一样，都是 `UIView` 的子类，不同与 `MB` , `SV` 提供的是单例，这也是它简洁的一大因素。
 
 ```objectivec
 + (SVProgressHUD*)sharedView {
@@ -128,11 +128,6 @@
                 // Register observer <=> we now have to handle orientation changes etc.
                 [self registerNotifications];
                 
-                // Post notification to inform user
-                [[NSNotificationCenter defaultCenter] postNotificationName:SVProgressHUDDidAppearNotification
-                                                                    object:self
-                                                                  userInfo:[self notificationUserInfo]];
-                
                 ...
                 
                 // Dismiss automatically if a duration was passed as userInfo. We start a timer
@@ -177,8 +172,99 @@
 }
 ```
 
+其实就是如果已经显示完全了就`dismiss`，如果没有显示完全就先显示完全再`dismiss`
 
+##Dismiss Methods
 
+同样dismiss暴露的也全部是类方法
 
+* `+ (void)popActivity;`
+* `+ (void)dismiss;`
+* `+ (void)dismissWithCompletion:(nullable SVProgressHUDDismissCompletion)completion;`
+* `+ (void)dismissWithDelay:(NSTimeInterval)delay;`
+* `+ (void)dismissWithDelay:(NSTimeInterval)delay completion:(nullable SVProgressHUDDismissCompletion)completion;`
+
+同样也是最终调用主方法：
+`- (void)dismissWithDelay:(NSTimeInterval)delay completion:(SVProgressHUDDismissCompletion)completion`
+这个方法其实逻辑跟`show`也差不多就是最终把`controlView` `backgroundView` `budView`都 remove 掉然后再把自己 remove，还有取消动画`progress`归零等
+
+```objectivec
+- (void)dismissWithDelay:(NSTimeInterval)delay completion:(SVProgressHUDDismissCompletion)completion {
+    __weak SVProgressHUD *weakSelf = self;
+    [[NSOperationQueue mainQueue] addOperationWithBlock:^{
+        __strong SVProgressHUD *strongSelf = weakSelf;
+        if(strongSelf){
+            ...
+            
+            __block void (^completionBlock)(void) = ^{
+                // Check if we really achieved to dismiss the HUD (<=> alpha values are applied)
+                // and the change of these values has not been cancelled in between e.g. due to a new show
+                if(self.backgroundView.alpha == 0.0f){
+                    // Clean up view hierarchy (overlays)
+                    [strongSelf.controlView removeFromSuperview];
+                    [strongSelf.backgroundView removeFromSuperview];
+                    [strongSelf.hudView removeFromSuperview];
+                    [strongSelf removeFromSuperview];
+                    
+                    // Reset progress and cancel any running animation
+                    strongSelf.progress = SVProgressHUDUndefinedProgress;
+                    [strongSelf cancelRingLayerAnimation];
+                    [strongSelf cancelIndefiniteAnimatedViewAnimation];
+                    
+                    ...                    
+                    // Run an (optional) completionHandler
+                    if (completion) {
+                        completion();
+                    }
+                }
+            };
+            
+            // UIViewAnimationOptionBeginFromCurrentState AND a delay doesn't always work as expected
+            // When UIViewAnimationOptionBeginFromCurrentState is set, animateWithDuration: evaluates the current
+            // values to check if an animation is necessary. The evaluation happens at function call time and not
+            // after the delay => the animation is sometimes skipped. Therefore we delay using dispatch_after.
+            
+            dispatch_time_t dipatchTime = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC));
+            dispatch_after(dipatchTime, dispatch_get_main_queue(), ^{
+                if (strongSelf.fadeOutAnimationDuration > 0) {
+                    // Animate appearance
+                    [UIView animateWithDuration:strongSelf.fadeOutAnimationDuration
+                                          delay:0
+                                        options:(UIViewAnimationOptions) (UIViewAnimationOptionAllowUserInteraction | UIViewAnimationCurveEaseOut | UIViewAnimationOptionBeginFromCurrentState)
+                                     animations:^{
+                                         animationsBlock();
+                                     } completion:^(BOOL finished) {
+                                         completionBlock();
+                                     }];
+                } else {
+                    animationsBlock();
+                    completionBlock();
+                }
+            });
+            
+            // Inform iOS to redraw the view hierarchy
+            [strongSelf setNeedsDisplay];
+        }
+    }];
+}
+```
+
+这里有一个小细节，注释也写的很清楚了。就是`UIViewAnimationOptionBeginFromCurrentState`搭配`delay`总是有点跳动画的毛病，所以SV这里用`dispatch_after`来延时。
+
+##总结
+
+总体来讲，[SVProgressHUD](https://github.com/SVProgressHUD/SVProgressHUD) 还是简洁易用为主，Github上给出的使用建议都是这种：
+
+```objectivec
+[SVProgressHUD show];
+dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    // time-consuming task
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [SVProgressHUD dismiss];
+    });
+});
+```
+
+源码实现确实也不算复杂，个人还是比较喜欢用。
 
 
