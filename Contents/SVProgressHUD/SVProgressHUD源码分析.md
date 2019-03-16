@@ -2,7 +2,7 @@
 
 众所周知 [SVProgressHUD](https://github.com/SVProgressHUD/SVProgressHUD) 是一个简洁易用的 HUD 库，我想探寻简洁易用背后的原理。
 
-##Singleton
+## Singleton
 
 `SVProgressHUD` 同 `MBProgressHUD` 一样，都是 `UIView` 的子类，不同与 `MB` , `SV` 提供的是单例，这也是它简洁的一大因素。
 
@@ -22,7 +22,7 @@
 
 常规的单例创建，根据是否是`App Extension`进行了判断以确定`Frame`大小
 
-##Show Methods
+## Show Methods
 
 `SV` 不像 `MB` 可以有较高的自由度定制，所以为了简洁，暴露的全是类方法
 
@@ -174,7 +174,7 @@
 
 其实就是如果已经显示完全了就`dismiss`，如果没有显示完全就先显示完全再`dismiss`
 
-##Dismiss Methods
+## Dismiss Methods
 
 同样dismiss暴露的也全部是类方法
 
@@ -251,7 +251,7 @@
 
 这里有一个小细节，注释也写的很清楚了。就是`UIViewAnimationOptionBeginFromCurrentState`搭配`delay`总是有点跳动画的毛病，所以SV这里用`dispatch_after`来延时。
 
-##总结
+## 总结
 
 总体来讲，[SVProgressHUD](https://github.com/SVProgressHUD/SVProgressHUD) 还是简洁易用为主，Github上给出的使用建议都是这种：
 

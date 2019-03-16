@@ -73,9 +73,9 @@ extension Kingfisher where Base: ImageView {
 }
 ```
 
-##一探究竟
+## 一探究竟
 
-###ImageView+Kingfisher
+### ImageView+Kingfisher
 
 我们就以[ImageView+Kingfisher](https://github.com/onevcat/Kingfisher/blob/master/Sources/ImageView%2BKingfisher.swift
       )为例
@@ -104,7 +104,7 @@ extension Kingfisher where Base: ImageView {
 其实喵神这里注释写的已经非常清楚了，我这里简单展开说明一下。
 ***
 
-####资源Resource
+#### 资源Resource
 
 参数第一个`resource`其实是一个协议，它定义了从缓存查找图片的`cacheKey`以及网络加载的`downloadURL`
 
@@ -136,7 +136,7 @@ setWebURL(resource.downloadURL)
 ```
 ***
 
-####占位图
+#### 占位图
 
 再说第二个参数`placeholder`，它也是一个协议（所谓从一个协议开始），很简单就是定义了两个方法，一个添加占位图，一个删除占位图
 
@@ -161,7 +161,7 @@ if !options.keepCurrentImageWhileLoading || noImageOrPlaceholderSet {
 注释写的清楚，当还没有image或placeholder时，总是设置一个placeholder
 ***
 
-####策略options
+#### 策略options
 
 第三个参数`options`这回不是协议了，它是一个包含不同策略信息的数组。诸如强制刷新啊，只内存缓存图片啊之类。如果用户不进行配置那么系统将使用默认
 
@@ -172,7 +172,7 @@ var options = KingfisherManager.shared.defaultOptions + (options ?? KingfisherEm
 剩下两个参数分别是`progress`回调和`completion`回调就不细说了。
 ***
 
-####获取图片
+#### 获取图片
 
 这些参数都准备好了就开始让`KingfisherManager.shared`调用下面方法去获取图片
 
@@ -186,7 +186,7 @@ func retrieveImage(with resource: Resource,
 这里根据`options`是否强制刷新，如果强制刷新那么直接走网络下载并缓存的方法，否则先去缓存中获取图片然后在回调`completionHandler`里去添加图片
 ***
 
-####safeAsync
+#### safeAsync
 
 回调里跟`SDWebImage`一样同样有个`safeAsync`
 
@@ -214,12 +214,12 @@ func safeAsync(_ block: @escaping ()->()) {
 ```
 目的也很明确保证图像的绘制在主线程完成
 
-###KingfisherManager
+### KingfisherManager
 
 刚才提到了获取图片的方法就是`KingfisherManager`调用的，它是一个全局唯一的单例它协调`ImageDownloader`以及`ImageCache`来进行图片的获取。
 ***
 
-####downloadAndCacheImage
+#### downloadAndCacheImage
 
 首先说下载并缓存，如果在获取图片的`options`里策略选择了`forceRefresh`那么`KingfisherManager`会率先调用
 
@@ -265,7 +265,7 @@ open func store(_ image: Image,
 这是一个异步操作，没有什么更多要解释的。值得一提的是，这里储存参数有一个`original`这个是Data格式的，这里处理是为了控制磁盘的大小，喵神建议大家为了磁盘更好的储存性能尽量提供`original`。
 ***
 
-####tryToRetrieveImageFromCach
+#### tryToRetrieveImageFromCach
 
 如果没有强制要求更新，都是首先去缓存中查找图片的，也就是先走下面这个方法
 
@@ -358,7 +358,7 @@ originalCache.retrieveImage(forKey: key, options: optionsWithoutProcessor) { ima
 }
 ```
 
-###ImageCache
+### ImageCache
 
 缓存图片的核心类喵神是这样注释的：
 >/// `ImageCache` represents both the memory and disk cache system of Kingfisher. 
@@ -369,7 +369,7 @@ originalCache.retrieveImage(forKey: key, options: optionsWithoutProcessor) { ima
 它维护了一个内存缓存和一个磁盘缓存，磁盘缓存支持自己配置。
 ***
 
-####缓存获取图片
+#### 缓存获取图片
 
 存方法之前提到了，删除方法也差不多同样是一个异步操作，不详细说了。说一下缓存获取图片方法。
 
@@ -443,7 +443,7 @@ sSelf.ioQueue.async(execute: block!)
 ```
 ***
 
-####过期清理
+#### 过期清理
 
 还有清除内存缓存，清除磁盘缓存方法，这里都不详细说了，说一下过期磁盘缓存清理。先用下面这个方法获取需要删除的URL数组，磁盘缓存大小和缓存文件
 
@@ -521,11 +521,11 @@ DispatchQueue.main.async {
 
 大概就是说这个通知在磁盘缓存过期或者太大了自动清理时候会发出，而`clearDiskCache`这个方法并不会出发。通知中的`userInfo`带着被移除的文件哈希值。从这个数组中你能获取被删除文件的哈希值。然后这个通知的主要目的是处理服务器的`304 Not Modified`。因为`Kingfisher`的缓存机制是基于`URL`，但是有时`URL`没变但是图片变了，比如用户头像。你当然可以设置强制刷新，但这不是好方法，尤其是重复下载同一个头像，所以这个通知机制就解决了服务器304的问题。具体见[this wiki](https://github.com/onevcat/Kingfisher/wiki/How-to-implement-ETag-based-304-(Not-Modified)-handling-in-Kingfisher) 
 
-###ImageDownloader
+### ImageDownloader
 
 >`ImageDownloader` represents a downloading manager for requesting the image with a URL from server.
 
-####ImageFetchLoad
+#### ImageFetchLoad
 
 不多赘述，直接分析。首先定义了一个`ImageFetchLoad`类
 
@@ -543,7 +543,7 @@ class ImageFetchLoad {
 这个类包含一些属性，都挺容易理解的
 ***
 
-####downloadImage
+#### downloadImage
 
 主方法，也是对外回调下载数据的方法:
 
@@ -657,7 +657,7 @@ private func callCompletionHandlerFailure(error: Error, url: URL) {
 
 ***
 
-####处理图片
+#### 处理图片
 
 原始数据完成后调用
 
@@ -696,7 +696,7 @@ if let image = image {
 
 至此，[Kingfisher](https://github.com/onevcat/Kingfisher)的主要流程方法就基本介绍完了。
 
-##总结
+## 总结
 
 [Kingfisher](https://github.com/onevcat/Kingfisher)的加载过程其实跟`SDWebImage`是一样的，在默认设置下：
 
