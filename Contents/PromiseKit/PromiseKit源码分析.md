@@ -151,5 +151,36 @@ override func seal(_ value: T) {
 
 ### Resolver
 
+`resolver`用于处理`promise`中`closure`中的结果，先看基础类型`Result`
 
+```Swift
+public enum Result<T> {
+    case fulfilled(T)
+    case rejected(Error)
+}
+```
+
+很简单，promise结果达成就fulfilled结果，发生错误就rejected错误。这个作法跟`Box`中的`sealant`很像。
+
+接着看Resolver实现
+
+```Swift
+public final class Resolver<T> {
+    let box: Box<Result<T>>
+
+    init(_ box: Box<Result<T>>) {
+        self.box = box
+    }
+
+    deinit {
+        if case .pending = box.inspect() {
+            conf.logHandler(.pendingPromiseDeallocated)
+        }
+    }
+}
+```
+
+这里发现，它包含一个`Box`属性，在`init`时会注入一个封装了`Result`的`Box`，在`deinit`时如果注入的`box`状态是`.pending`就会警告`Resolver`被提前释放了。
+
+#### Extension
 
