@@ -184,3 +184,257 @@ public final class Resolver<T> {
 
 #### Extension
 
+`resolver`结构简单，功能基本是`extension`实现
+
+```Swift
+public extension Resolver {
+    /// Fulfills the promise with the provided value
+    func fulfill(_ value: T) {
+        box.seal(.fulfilled(value))
+    }
+
+    /// Rejects the promise with the provided error
+    func reject(_ error: Error) {
+        box.seal(.rejected(error))
+    }
+
+    /// Resolves the promise with the provided result
+    func resolve(_ result: Result<T>) {
+        box.seal(result)
+    }
+
+    /// Resolves the promise with the provided value or error
+    func resolve(_ obj: T?, _ error: Error?) {
+        if let error = error {
+            reject(error)
+        } else if let obj = obj {
+            fulfill(obj)
+        } else {
+            reject(PMKError.invalidCallingConvention)
+        }
+    }
+
+    /// Fulfills the promise with the provided value unless the provided error is non-nil
+    func resolve(_ obj: T, _ error: Error?) {
+        if let error = error {
+            reject(error)
+        } else {
+            fulfill(obj)
+        }
+    }
+
+    /// Resolves the promise, provided for non-conventional value-error ordered completion handlers.
+    func resolve(_ error: Error?, _ obj: T?) {
+        resolve(obj, error)
+    }
+}
+```
+
+可以看出，无论是接收value、error还是Result都是给内部的box赋值。注释很清晰，不过多赘述。
+
+## Promise
+
+之前的分析就把PromiseKit中的基本类型了解了。“单词”我们已经掌握了，下面试着翻译翻译“段落”。
+
+首先看Promise的初始化方法的实现：
+
+```Swift
+public final class Promise<T>: Thenable, CatchMixin {
+    let box: Box<Result<T>>
+
+    fileprivate init(box: SealedBox<Result<T>>) {
+        self.box = box
+    }
+    
+    public class func value(_ value: T) -> Promise<T> {
+        return Promise(box: SealedBox(value: .fulfilled(value)))
+    }
+
+    /// Initialize a new rejected promise.
+    public init(error: Error) {
+        box = SealedBox(value: .rejected(error))
+    }
+
+    /// Initialize a new promise bound to the provided `Thenable`.
+    public init<U: Thenable>(_ bridge: U) where U.T == T {
+        box = EmptyBox()
+        bridge.pipe(to: box.seal)
+    }
+
+    /// Initialize a new promise that can be resolved with the provided `Resolver`.
+    public init(resolver body: (Resolver<T>) throws -> Void) {
+        box = EmptyBox()
+        let resolver = Resolver(box)
+        do {
+            try body(resolver)
+        } catch {
+            resolver.reject(error)
+        }
+    }
+}
+```
+
+首先是`Promise`也持有一个`box`属性，第一个`init`方法是一个文件私有方法，为属性赋值。后两个方法是接收`value`就封箱然后`fulfilled`出去，接收`error`就`rejected`出去没有啥好说的。
+
+第三个绑定`Thenable`的一会再说，第四个方法注入了一个异步过程。`body`参数支持我们分别调用`fulfill`和`reject`，然后进行`box.seal`方法去通知所有关注这个值的handlers。
+
+说完初始化过程，再来说说Promises是如何链接的。
+
+## Thenable
+
+首先Theanble是一个协议，它约定了以下三个内容：
+
+```Swift
+public protocol Thenable: class {
+    /// The type of the wrapped value
+    associatedtype T
+
+    /// `pipe` is immediately executed when this `Thenable` is resolved
+    func pipe(to: @escaping(Result<T>) -> Void)
+
+    /// The resolved result or nil if pending.
+    var result: Result<T>? { get }
+}
+```
+
+我们由浅入深来看，首先是关联类型`T`，在协议被采用时才会被指定，也就是`Result`中包含的类型。
+
+其次是`result`，这个对应实现在`Promise`里：
+
+```Swift
+public var result: Result<T>? {
+        switch box.inspect() {
+        case .pending:
+            return nil
+        case .resolved(let result):
+            return result
+        }
+    }
+```
+
+其实就是从封好的箱子里取值，如果还是`.pending`状态就返回`nil`
+
+### pipe
+
+先看`pipe`在`Promise`中的实现：
+
+```Swift
+public func pipe(to: @escaping(Result<T>) -> Void) {
+        switch box.inspect() {
+        case .pending:
+            box.inspect {
+                switch $0 {
+                case .pending(let handlers):
+                    handlers.append(to)
+                case .resolved(let value):
+                    to(value)
+                }
+            }
+        case .resolved(let value):
+            to(value)
+        }
+    }
+```
+
+可以看到先是读取了当前Promise盒子的状态，如果封上了就把值传给pipe中的closure，如果是.pending状态就加入到box中的handlers
+
+再看then中的pipe到底做了什么
+
+```Swift
+func then<U: Thenable>(on: DispatchQueue? = conf.Q.map, flags: DispatchWorkItemFlags? = nil, _ body: @escaping(T) throws -> U) -> Promise<U.T> {
+        let rp = Promise<U.T>(.pending)
+        pipe {
+            switch $0 {
+            case .fulfilled(let value):
+                on.async(flags: flags) {
+                    do {
+                        let rv = try body(value)
+                        guard rv !== rp else { throw PMKError.returnedSelf }
+                        rv.pipe(to: rp.box.seal)
+                    } catch {
+                        rp.box.seal(.rejected(error))
+                    }
+                }
+            case .rejected(let error):
+                rp.box.seal(.rejected(error))
+            }
+        }
+        return rp
+    }
+```
+
+首先关注一下这个`body`参数，他是在`Promise`对象之后串联的`closure`，这个`closure`一封装的值为参数返回一个新的遵循`Thenable`的对象。
+
+了解这个以后，那就能够了解用作返回值的`Promise<U.T>`了
+
+```Swift
+let rp = Promise<U.T>(.pending)
+```
+
+然后检查`Result`中是否有错误，有就封装`rejected`否则就异步执行一段`closure`，而这里的关键就是
+
+```Swift
+rv.pipe(to: rp.box.seal)
+```
+
+是啥意思呢，就是把`then`中`closure`
+
+执行成功封装的值交给返回值`rp`的`box`，这也是异步过程能够链式调用的关键。
+
+## 总结
+
+从头梳理一遍`Promise`的工作流程。
+
+首先调用`Promise.init`方法：
+
+```Swift
+/// Initialize a new promise that can be resolved with the provided `Resolver`.
+    public init(resolver body: (Resolver<T>) throws -> Void) {
+        box = EmptyBox()
+        let resolver = Resolver(box)
+        do {
+            try body(resolver)
+        } catch {
+            resolver.reject(error)
+        }
+    }
+```
+
+在`init`方法里，创建了一个`EmptyBox`。这个`EmptyBox`自带一个关联的`handlers`数组，一个同步队列。
+
+用`EmptyBox`创建一个`Resolver`用于处理`closure`中的结果。
+
+```Swift
+try body(resolver)
+```
+
+调用Promise中的closure，如果有异常就调用resolver.reject。closure中的方法成功就fulfill，错误就reject
+
+无论是fulfill还是reject其实都是把value或error封装进box
+
+然后调用seal方法
+
+```Swift
+override func seal(_ value: T) {
+        var handlers: Handlers<T>!
+        barrier.sync(flags: .barrier) {
+            guard case .pending(let _handlers) = self.sealant else {
+                return  // already fulfilled!
+            }
+            handlers = _handlers
+            self.sealant = .resolved(value)
+        }
+
+        if let handlers = handlers {
+            handlers.bodies.forEach{ $0(value) }
+        }
+    }
+```
+
+如果盒子还没封上就把值封装进去然后依次调用处理这个期望值的handlers，这个就是Promise工作的大概流程。
+
+本文分析思路有借鉴[泊学](https://boxueio.com/)的地方，在此附上官网链接。
+
+如果你有发现任何错误，也欢迎您的赐教。
+
+
