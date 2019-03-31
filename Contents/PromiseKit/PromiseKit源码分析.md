@@ -8,7 +8,7 @@
 ### Box
 `box`是`PromiseKit`中基本的类，在介绍它之前，先得说一下同样定义在Box.swift中的另外两个更小的类型`Sealant`和`Handlers`
 
-```Swift
+```swift
 enum Sealant<R> {
     case pending(Handlers<R>)
     case resolved(R)
@@ -29,7 +29,7 @@ final class Handlers<R> {
 
 首先从`Box`基类讲起
 
-```Swift
+```swift
 class Box<T> {
   func inspect() -> Sealant<T> { fatalError() }
   func inspect(_: (Sealant<T>) -> Void) { fatalError() }
@@ -39,19 +39,19 @@ class Box<T> {
 
 它接受一个范型参数，约束了三个方法，但是其实这三个方法都近乎空实现
 
-```Swift
+```swift
 func inspect() -> Sealant<T> { fatalError() }
 ```
 
 我们根据返回值可以查询目前`box`的状态，是`.pending`还是`.resolved`
 
-```Swift
+```swift
 func inspect(_: (Sealant<T>) -> Void) { fatalError() }
 ```
 
 则是根据状态的不同选择不同的逻辑
 
-```Swift
+```swift
 func seal(_: T) {}
 ```
 
@@ -61,7 +61,7 @@ func seal(_: T) {}
 
 翻译过来就是`封上了的箱子`，看代码
 
-```Swift
+```swift
 final class SealedBox<T>: Box<T> {
   let value: T
 
@@ -81,7 +81,7 @@ final class SealedBox<T>: Box<T> {
 
 空箱`EmptyBox`是`Box`类中最复杂也是最重要的派生类，先看属性
 
-```Swift
+```swift
 private var sealant = Sealant<T>.pending(.init())
 private let barrier = DispatchQueue(label: "org.promisekit.barrier", attributes: .concurrent)
 ```
@@ -92,7 +92,7 @@ private let barrier = DispatchQueue(label: "org.promisekit.barrier", attributes:
 
 接下来看获取箱子状态的`inspect`方法
 
-```Swift
+```swift
 override func inspect() -> Sealant<T> {
         var rv: Sealant<T>!
         barrier.sync {
@@ -106,7 +106,7 @@ override func inspect() -> Sealant<T> {
 
 再看设置状态的`inspect`方法
 
-```Swift
+```swift
 override func inspect(_ body: (Sealant<T>) -> Void) {
         var sealed = false
         barrier.sync(flags: .barrier) {
@@ -130,7 +130,7 @@ override func inspect(_ body: (Sealant<T>) -> Void) {
 
 最后再看封箱方法`seal`
 
-```Swift
+```swift
 override func seal(_ value: T) {
         var handlers: Handlers<T>!
         barrier.sync(flags: .barrier) {
@@ -153,7 +153,7 @@ override func seal(_ value: T) {
 
 `resolver`用于处理`promise`中`closure`中的结果，先看基础类型`Result`
 
-```Swift
+```swift
 public enum Result<T> {
     case fulfilled(T)
     case rejected(Error)
@@ -164,7 +164,7 @@ public enum Result<T> {
 
 接着看Resolver实现
 
-```Swift
+```swift
 public final class Resolver<T> {
     let box: Box<Result<T>>
 
@@ -186,7 +186,7 @@ public final class Resolver<T> {
 
 `resolver`结构简单，功能基本是`extension`实现
 
-```Swift
+```swift
 public extension Resolver {
     /// Fulfills the promise with the provided value
     func fulfill(_ value: T) {
@@ -238,7 +238,7 @@ public extension Resolver {
 
 首先看Promise的初始化方法的实现：
 
-```Swift
+```swift
 public final class Promise<T>: Thenable, CatchMixin {
     let box: Box<Result<T>>
 
@@ -284,7 +284,7 @@ public final class Promise<T>: Thenable, CatchMixin {
 
 首先Theanble是一个协议，它约定了以下三个内容：
 
-```Swift
+```swift
 public protocol Thenable: class {
     /// The type of the wrapped value
     associatedtype T
@@ -301,7 +301,7 @@ public protocol Thenable: class {
 
 其次是`result`，这个对应实现在`Promise`里：
 
-```Swift
+```swift
 public var result: Result<T>? {
         switch box.inspect() {
         case .pending:
@@ -318,7 +318,7 @@ public var result: Result<T>? {
 
 先看`pipe`在`Promise`中的实现：
 
-```Swift
+```swift
 public func pipe(to: @escaping(Result<T>) -> Void) {
         switch box.inspect() {
         case .pending:
@@ -340,7 +340,7 @@ public func pipe(to: @escaping(Result<T>) -> Void) {
 
 再看then中的pipe到底做了什么
 
-```Swift
+```swift
 func then<U: Thenable>(on: DispatchQueue? = conf.Q.map, flags: DispatchWorkItemFlags? = nil, _ body: @escaping(T) throws -> U) -> Promise<U.T> {
         let rp = Promise<U.T>(.pending)
         pipe {
@@ -367,13 +367,13 @@ func then<U: Thenable>(on: DispatchQueue? = conf.Q.map, flags: DispatchWorkItemF
 
 了解这个以后，那就能够了解用作返回值的`Promise<U.T>`了
 
-```Swift
+```swift
 let rp = Promise<U.T>(.pending)
 ```
 
 然后检查`Result`中是否有错误，有就封装`rejected`否则就异步执行一段`closure`，而这里的关键就是
 
-```Swift
+```swift
 rv.pipe(to: rp.box.seal)
 ```
 
@@ -387,7 +387,7 @@ rv.pipe(to: rp.box.seal)
 
 首先调用`Promise.init`方法：
 
-```Swift
+```swift
 /// Initialize a new promise that can be resolved with the provided `Resolver`.
     public init(resolver body: (Resolver<T>) throws -> Void) {
         box = EmptyBox()
@@ -404,17 +404,17 @@ rv.pipe(to: rp.box.seal)
 
 用`EmptyBox`创建一个`Resolver`用于处理`closure`中的结果。
 
-```Swift
+```swift
 try body(resolver)
 ```
 
-调用Promise中的closure，如果有异常就调用resolver.reject。closure中的方法成功就fulfill，错误就reject
+调用`Promise`中的`closure`，如果有异常就调用`resolver.reject`。`closure`中的方法成功就`fulfill`，错误就`reject`
 
-无论是fulfill还是reject其实都是把value或error封装进box
+无论是`fulfill`还是`reject`其实都是把`value`或`error`封装进`box`
 
 然后调用seal方法
 
-```Swift
+```swift
 override func seal(_ value: T) {
         var handlers: Handlers<T>!
         barrier.sync(flags: .barrier) {
@@ -431,7 +431,7 @@ override func seal(_ value: T) {
     }
 ```
 
-如果盒子还没封上就把值封装进去然后依次调用处理这个期望值的handlers，这个就是Promise工作的大概流程。
+如果盒子还没封上就把值封装进去然后依次调用处理这个期望值的`handlers`，这个就是`Promise`工作的大概流程。
 
 本文分析思路有借鉴[泊学](https://boxueio.com/)的地方，在此附上官网链接。
 
